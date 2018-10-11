@@ -1,0 +1,447 @@
+---
+title: "Expectation-Maximization in R Markdown"
+# subtitle: "possible subtitle goes here"
+author:
+  - Cosmin Borsa^[<cosmin.borsa@uconn.edu>; M.S. in Applied Financial Mathematics,
+    Department of Mathematics, University of Connecticut.]
+date: "`r format(Sys.time(), '%d %B %Y')`"
+documentclass: article
+papersize: letter
+fontsize: 11pt
+bibliography: template.bib
+biblio-style: asa
+keywords: Template, R Markdown, bookdown, Data Lab
+# keywords set in YAML header here only go to the properties of the PDF output
+# the keywords that appear in PDF output are set in latex/before_body.tex
+output:
+  bookdown::pdf_document2
+  bookdown::html_document2
+abstract: |
+    This document is a homework assignment for the course Statistical Computing at the University of Connecticut. First, we are going to derive the updating rules in the construction of the EM algorithm in application to maximum likelihood estimation in finite mixture regression models. Second, we are going to implement the EM algorithm in R. Last, we will estimate some parameters using a given data set.
+---
+
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+## some utility functions, see the source code for details
+source("utils_template.R")
+
+## specify the packages needed
+pkgs <- c("DT", "leaflet", "splines2", "webshot", "graphics", "elliptic", "amsmath")
+need.packages(pkgs)
+
+## external data can be read in by regular functions,
+## such as read.table or load
+
+## for latex and html output
+isHtml <- knitr::is_html_output()
+isLatex <- knitr::is_latex_output()
+latex <- ifelse(isLatex, '\\LaTeX\\', 'LaTeX')
+
+## specify global chunk options
+knitr::opts_chunk$set(fig.width = 5, fig.height = 4, dpi = 300,
+                      out.width = "90%", fig.align = "center")
+
+```
+
+# Expectation - Maximization Algorithm {#sec:EMAlgo}
+
+The expectation-maximization algorithm is an iterative method to find maximum likelihood estimates of parameters in a statistical model, where the model depends on unobserved variables. We will derive the updating rules in the algorithm that was given to us based on the construction of an EM algorithm.
+
+The density of $y_i$ which is conditional on $\mathbf{x}_i$ is given in the equation \@ref(eq:density) 
+
+\begin{align}
+  f(y_i | \mathbf{x}_i,\Psi) = \sum_{j=1}^{m} \pi_j \phi(y_i; \mathbf{x}_i^{T} \boldsymbol{\beta}_j, \sigma^2)
+  \quad\text{with}\quad i = 1, \ldots, n
+  (\#eq:density)
+\end{align}
+
+In the density formula \@ref(eq:density) the $\pi_j$s are called mixing the proportions, $\boldsymbol{\beta}_{j}$ is the regression coefficient vector for the $j^{\, \text{th}}$ group, $\phi(\cdot; \mu, \sigma^2)$ denotes the density function of $N(\mu, \sigma^2)$, and lastly $\Psi = (\pi_1,\boldsymbol{\beta}_1, \ldots, \pi_m, \boldsymbol{\beta}_m, \sigma)^T$ collects all the unknown parameters. 
+
+We can infer the unknown parameter $\Psi$ in \@ref(eq:density) by
+
+\begin{align}
+  \hat{\Psi}_{\text{mle}} = \arg \max_{\Psi}{\sum_{i=1}^n \log{\{\sum_{j=1}^m \pi_j \phi(y_i; \mathbf{x}_i^{T} \boldsymbol{\beta}_j, \sigma_j^2)\}}}
+  (\#eq:mle)
+\end{align}
+
+and we can obtain the values of $z_{ij}$ by
+
+\begin{align}
+  z_{ij} = \begin{cases} 
+      1 & \text{if }i\text{th observation is from }j\text{th component}; \\
+      0 & \text{otherwise}
+   \end{cases}
+   (\#eq:z)
+\end{align}
+
+## E - Step
+
+In this section we will verify the validity of the provided E-Step of the EM algorithm. To do so, we have to compute the conditional expectation of the complete log-likelihood $l_{n}^{c}(\Psi)$ with respect to $z_i$. However, before we do that we are going to display the equation for the complete log-likelihood $l_{n}^{c}(\Psi)$ in \@ref(eq:l).
+
+\begin{align}  
+  l_{n}^{c}(\Psi) = \sum_{i = 1}^{n} \sum_{j = 1}^{m} z_{ij} \log{\{\pi_j \phi(y_i - \mathbf{x}_{i}^{T} \boldsymbol{\beta}_j; 0; \sigma^2)\}}
+(\#eq:l)
+\end{align}
+
+Next we are going to computes the conditional expectation of $l_{n}^{c}(\Psi)$.
+
+
+\begin{align}
+  Q(\Psi | \Psi^{(k)}) = \mathbb{E}_{z} \{ l_{n}^{c}(\Psi)\} 
+= \mathbb{E}_{z} \left[ \sum_{i=1}^{n} \sum_{j=1}^{m} z_{ij} \log{\{\pi_j \phi(y_i-\mathbf{x}_{i}^{T}\boldsymbol{\beta}_j;0;\sigma^2)\}} \right] 
+\end{align}
+
+
+\begin{align}
+  Q(\Psi | \Psi^{(k)}) = \sum_{i=1}^{n} \sum_{j=1}^{m}\log{\{\pi_j \phi(y_i-\mathbf{x}_{i}^{T}\boldsymbol{\beta}_j;0;\sigma^2)\}} \mathbb{E}_{z} \left[ z_{ij} | \mathbf{x}_i, y_i;\Psi^{(k)}\right]
+\end{align}
+
+Since $p_{ij}^{(k+1)} = \mathbb{E}_{z} \left[ z_{ij} | \mathbf{x}_i, y_i;\Psi^{(k)}\right]$ we have
+
+\begin{align}
+  Q(\Psi | \Psi^{(k)}) = \sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)}\log{\{\pi_j \phi(y_i-\mathbf{x}_{i}^{T}\boldsymbol{\beta}_j;0;\sigma^2)\}}
+  (\#eq:Q)
+\end{align}
+
+As $p_{ij}$ stands for the probability that the observation belongs to the $j^{\, \text{th}}$ component, and 
+
+\begin{equation}
+  p_{ij} = \dfrac{\pi_j \phi(y_i - \mathbf{x}_i^{T} \boldsymbol{\beta}_j^{(k)}; 0, \sigma^2)}{\sum_{j=1}^m \pi_j \phi(y_i - \mathbf{x}_i^{T} \boldsymbol{\beta}_j^{(k)}; 0, \sigma^2)}
+\label{eq:pij} 
+\end{equation}
+
+we can see that $p_{ij}$ is obtained by a weighting of normal densities $\phi(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)};0,\sigma^2)$ using the mixing proportions $\pi_j$. Therefore, 
+
+\begin{equation}
+ \sum_{j=1}^m p_{ij} =  \dfrac{\sum_{j=1}^m \pi_j \phi(y_i - \mathbf{x}_i^{T} \boldsymbol{\beta}_j^{(k)}; 0, \sigma^2)}{\sum_{j=1}^m \pi_j \phi(y_i - \mathbf{x}_i^{T} \boldsymbol{\beta}_j^{(k)}; 0, \sigma^2)}  = 1
+(\#eq:pijeq) 
+\end{equation}
+
+## M - Step 
+
+In this section we will verify the validity of the provided M-Step of the EM algorithm. We will maximize $Q(\Psi | \Psi^{(k)})$ to obtain $\boldsymbol{\beta}^{(k+1)}$ and $\sigma^{2^{(k+1)}}$. However, before we do that, we are going to verify that 
+
+\begin{align}
+  \pi_j^{(k+1)} = \dfrac{\sum_{i=1}^{n} p_{ij}^{(k+1)}}{n}
+\end{align}
+
+Since $\pi_1,\ldots,\pi_m$ represent the mixing proportions, summing $\pi_j$ with respect to $j$ yields $\sum_{j=1}^{m} \pi_j = 1$. Since we are maximizing under the constraint that $\sum_{j=1}^{m} \pi_j = 1$, we are going to use the method of Lagrange multipliers. Let $\mathcal{L}(\pi_1, \ldots, \pi_m)$ be given by the equation \@ref(eq:L) where $\lambda$ is the Lagrange multiplier.
+
+\begin{align}
+  \mathcal{L}(\pi_1, \ldots, \pi_m) = \sum_{i=1}^{n} \sum_{j=1}^{m} p_{ij}^{(k+1)} \log{\{\pi_j \phi(y_i-\mathbf{x}_{i}^{T}\boldsymbol{\beta}_j;0;\sigma^2)\}} - \lambda\left[\sum_{j=1}^{m} \pi_{j} - 1 \right]
+(\#eq:L)
+\end{align}
+
+We will obtain the desired $\pi_j^{(k+1)}$ by maximizing $\mathcal{L}$. Thus, we are going to take the partial derivative of $\mathcal{L}$ with respect to $\pi_j$ and set it equal to $0$.
+
+\begin{equation}
+  \dfrac{\partial\mathcal{L}}{\partial \pi_j} = \sum_{i=1}^{n} \sum_{j=1}^{m} p_{ij}^{(k+1)} \dfrac{1}{\pi_{j}^{(k+1)}} - \lambda
+(\#eq:Ld)
+\end{equation}
+
+Since $\sum_{j=1}^{m} p_{ij} = 1$ and $\sum_{j=1}^{m} \pi_j = 1$ the equation becomes 
+
+\begin{equation}
+\dfrac{\partial\mathcal{L}}{\partial \pi_{j}^{(k+1)}} = n - \lambda
+(\#eq:Lderivative)
+\end{equation}
+
+Next, we will set the equation \@ref(eq:Lderivative) equal to zero, and solve it for $\lambda$. Thus, $\lambda = n$ and plugging it in equation \@ref(eq:Ld) we get
+
+\begin{equation}
+\dfrac{\partial\mathcal{L}}{\partial \pi_{j}^{(k+1)}} = \sum_{i=1}^{n} \sum_{j=1}^{m} p_{ij}^{(k+1)}\dfrac{1}{\pi_{j}^{(k+1)}} - n
+(\#eq:Lder)
+\end{equation}
+
+To obtain $\pi_{j}^{(k+1)}$ we are going to set the equation \@ref(eq:Lder) to $0$ and solve for $\pi_{j}^{(k+1)}$. Thus,
+
+\begin{align}
+n = \sum_{i=1}^{n} \sum_{j=1}^{m} p_{ij}^{(k+1)}\dfrac{1}{\pi_{j}^{(k+1)}}
+\end{align}
+
+
+which implies 
+
+\begin{align}
+\pi_{j}^{(k+1)} = \dfrac{\sum_{i=1}^{n} p_{ij}^{(k+1)}}{n}
+\end{align}
+
+Next, we will verify that 
+
+\begin{align}
+  \boldsymbol{\beta}_j^{(k+1)} = \left(\sum_{i=1}^{n} \mathbf{x}_i \mathbf{x}_i^{T}p_{ij}^{(k+1)}\right)^{-1}\left(\sum_{i=1}^{n} \mathbf{x}_i p_{ij}^{(k+1)}y_i\right) \quad\text{with}\,\, j = 1, \ldots, m
+\end{align}
+
+However, before we do that, we will revise $Q(\Psi|\Psi^{(k)})$ from equation \@ref(eq:Q). Since $\phi(\cdot; \mu, \sigma^2)$ denotes the probability density function of normal distribution $N(\mu, \sigma^2)$, we can write 
+
+\begin{align}
+\phi(y_i-\mathbf{x}_{i}^{T}\boldsymbol{\beta}_j;0;\sigma^2) = \dfrac{1} {\sqrt{2 \pi \sigma^2}}\exp{\left[\dfrac{-1}{2\sigma^2}(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)})^{T}(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)}) \right]} 
+\end{align}
+
+Therefore, we can rewrite $Q(\Psi|\Psi^{(k)})$ as follows
+
+\begin{align}
+Q(\Psi|\Psi^{(k)}) &= \sum_{i=1}^{n}\sum_{j=1}^{m} p_{ij}^{(k+1)}\left[\log{\pi_j} + \log{\left[\dfrac{1}{\sqrt{2\pi\sigma^2}}\exp{\left[\dfrac{-1}{2\sigma^2}(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)})^{T}(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)}) \right]} \right]} \right] 
+\end{align}
+
+\begin{align}
+Q(\Psi|\Psi^{(k)}) &= \sum_{i=1}^{n}\sum_{j=1}^{m} p_{ij}^{(k+1)}\left[\log{\pi_j} + \log{\left[\dfrac{1}{\sqrt{2\pi\sigma^2}}\exp{\left[\dfrac{-1}{2\sigma^2}(y_i^T-(\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)})^{T})(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)}) \right]} \right]} \right]
+\end{align}
+
+\begin{align}
+Q(\Psi|\Psi^{(k)}) &= \sum_{i=1}^{n}\sum_{j=1}^{m} p_{ij}^{(k+1)}\left[\log{\pi_j} + \log{\left[\dfrac{1}{\sqrt{2\pi\sigma^2}}\exp{\left[\dfrac{-1}{2\sigma^2}(y_i^T-(\boldsymbol{\beta}_j^{(k+1)})^{T}\mathbf{x}_i)(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)}) \right]} \right]} \right] 
+\end{align}
+
+\begin{align}
+Q &= \sum_{i=1}^{n}\sum_{j=1}^{m} p_{ij}^{(k+1)}\left[\log{\pi_j} + \log{\left[\dfrac{1}{\sqrt{2\pi\sigma^2}}\exp{\left[\dfrac{-1}{2\sigma^2}(y_i^Ty_i-(\boldsymbol{\beta}_j^{(k+1)})^{T}\mathbf{x}_iy_i - y_i^T\mathbf{x}_i^T\boldsymbol{\beta}_j^{(k+1)}+(\boldsymbol{\beta}_j^{(k+1)})^T\mathbf{x}_i\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)}) \right]} \right]} \right] 
+\end{align}
+
+Since $y_i$ is a scalar, $y_i^T = y_i$ and the following partial derivatives are fairly easy to compute 
+
+\begin{align}
+  \dfrac{\partial \left(\boldsymbol{\beta}_j^{(k+1)}\mathbf{x}_iy_i\right)}{\partial \boldsymbol{\beta}_j^{(k+1)}} &= \dfrac{\partial \left((\mathbf{x}_iy_i)^T\boldsymbol{\beta}_j^{(k+1)}\right)}{\partial \boldsymbol{\beta}_j^{(k+1)}} = (\mathbf{x}_iy_i)^T = y_i^T\mathbf{x}_i^T = y_i\mathbf{x}_i^T (\#eq:Betad1)
+\end{align}
+
+
+\begin{align}
+\dfrac{\partial \left(\left(\boldsymbol{\beta}_j^{(k+1)}\right)^T\mathbf{x}_i\mathbf{x}_i^T\boldsymbol{\beta}_j^{(k+1)}\right)}{\partial\boldsymbol{\beta}_j^{(k+1)}} 
+= \left(\boldsymbol{\beta}_j^{(k+1)}\right)^T \left[\mathbf{x}_i\mathbf{x}_i^T + (\mathbf{x}_i\mathbf{x}_i^T)^T \right] = \left(\boldsymbol{\beta}_j^{(k+1)}\right)^T \left[\mathbf{x}_i\mathbf{x}_i^T + \mathbf{x}_i\mathbf{x}_i^T\right]
+\end{align}
+
+\begin{align}
+\dfrac{\partial \left(\left(\boldsymbol{\beta}_j^{(k+1)}\right)^T\mathbf{x}_i\mathbf{x}_i^T\boldsymbol{\beta}_j^{(k+1)}\right)}{\partial\boldsymbol{\beta}_j^{(k+1)}} 
+= 2\left(\boldsymbol{\beta}_j^{(k+1)}\right)^T\mathbf{x}_i\mathbf{x}_i^T (\#eq:Betad2)
+\end{align}
+
+Using the partial derivatives in \@ref(eq:Betad1) and \@ref(eq:Betad2), we will now compute the partial derivative of $Q(\Psi|\Psi^{(k)})$ with respect to $\boldsymbol{\beta}_j^{(k+1)}$. We want to advise the reader that the derivative is fairly complicated; therefore, equation \@ref(eq:Qderiv) summarizes the derivation.
+
+\begin{align}
+\dfrac{\partial Q(\Psi|\Psi^{(k)})}{\partial \boldsymbol{\beta}_j^{(k+1)}}
+&= \sum_{i=1}^n\sum_{j=1}^m p_{ij}^{(k+1)}\left(\dfrac{\sqrt{2\pi\sigma^2}}{\exp{\{\dfrac{-1}{2\sigma^2}(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)})^{T}(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)}) \}}}\right)\Big(\dfrac{1}{\sqrt{2\pi\sigma^2}}\Big( \dfrac{-1}{2\sigma^2}\Big(0 - y_i\mathbf{x}_i^T - y_i\mathbf{x}_i^T \\
+&\phantom{00000000}+ 2\left(\boldsymbol{\beta}_j^{(k+1)}\right)^T\mathbf{x}_i\mathbf{x}_i^T\Big)\Big)
+\exp{\{\dfrac{-1}{2\sigma^2}(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)})^{T}(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)}) \}}\Big) 
+\end{align}
+
+\begin{align}
+\dfrac{\partial Q(\Psi|\Psi^{(k)})}{\partial \boldsymbol{\beta}_j^{(k+1)}} &= \sum_{i=1}^n\sum_{j=1}^m p_{ij}^{(k+1)}\left(\dfrac{-1}{2\sigma^2}\right)\left(-2y_i\mathbf{x}_i^T + 2\left(\boldsymbol{\beta}_j^{(k+1)}\right)^T\mathbf{x}_i\mathbf{x}_i^T\right) 
+\end{align}
+
+\begin{align}
+\dfrac{\partial Q(\Psi|\Psi^{(k)})}{\partial \boldsymbol{\beta}_j^{(k+1)}} &= \sum_{i=1}^n\sum_{j=1}^m p_{ij}^{(k+1)} \left( \dfrac{1}{\sigma^2} \right) \left(y_i\mathbf{x}_i^T - \left( \boldsymbol{\beta}_j^{(k+1)} \right)^T\mathbf{x}_i \mathbf{x}_i^T\right)
+(\#eq:Qderiv)
+\end{align}
+
+Next, we will set the partial derivative \@ref(eq:Qderiv) equal to $0$ to solve for $\boldsymbol{\beta}_j^{(k+1)}$, and we will simplify the equation as much as we can. Thus, we multiply both sides by $\sigma^2$, and we will obtain
+
+\begin{align}
+\sum_{i=1}^n\sum_{j=1}^m p_{ij}^{(k+1)} \left(\boldsymbol{\beta}_j^{(k+1)}\right)^T\mathbf{x}_i\mathbf{x}_i^T = \sum_{i=1}^n\sum_{j=1}^m p_{ij}^{(k+1)} y_i\mathbf{x}_i^T
+\end{align}
+
+
+Since $\boldsymbol{\beta}_j^{(k+1)}$ depends only on $j$ and $p_{ij}^{(k+1)}$ is a scalar, for $j = 1, \ldots, m$ we have
+
+\begin{align}
+\left(\boldsymbol{\beta}_j^{(k+1)}\right)^T \sum_{i=1}^n p_{ij}^{(k+1)} \mathbf{x}_i\mathbf{x}_i^T = \sum_{i=1}^n p_{ij}^{(k+1)} y_i\mathbf{x}_i^T
+\end{align}
+
+We can now easily solve for $\left(\boldsymbol{\beta}_j^{(k+1)}\right)^T$.
+
+\begin{align}
+\left(\boldsymbol{\beta}_j^{(k+1)}\right)^T &= \left(\sum_{i=1}^n p_{ij}^{(k+1)} y_i\mathbf{x}_i^T\right)\left( \sum_{i=1}^n p_{ij}^{(k+1)} \mathbf{x}_i\mathbf{x}_i^T \right)^{-1}
+\end{align}
+
+Last, we will obtain the desired formula for $\boldsymbol{\beta}_j^{(k+1)}$ by taking the transpose of both sides. Hence, for $j=1,\ldots,m$ we have
+
+\begin{align}
+\boldsymbol{\beta}_j^{(k+1)} &= \left[\left(\sum_{i=1}^n p_{ij}^{(k+1)} y_i\mathbf{x}_i^T\right)\left( \sum_{i=1}^n p_{ij}^{(k+1)} \mathbf{x}_i\mathbf{x}_i^T \right)^{-1}\right]^{T} \\
+\end{align}
+
+\begin{align}
+\boldsymbol{\beta}_j^{(k+1)} &= \left[\left( \sum_{i=1}^n p_{ij}^{(k+1)} \mathbf{x}_i\mathbf{x}_i^T \right)^{-1}\right]^{T}\left[\left(\sum_{i=1}^n p_{ij}^{(k+1)} y_i\mathbf{x}_i^T\right) \right]^{T} \\
+\end{align}
+
+\begin{align}
+\boldsymbol{\beta}_j^{(k+1)} &= \left[\left( \sum_{i=1}^n p_{ij}^{(k+1)} \mathbf{x}_i\mathbf{x}_i^T \right)^{T}\right]^{-1}\left[\sum_{i=1}^n \left(p_{ij}^{(k+1)} y_i\mathbf{x}_i^T\right)^{T} \right]\\
+\end{align}
+
+\begin{align}
+\boldsymbol{\beta}_j^{(k+1)} &= \left[\sum_{i=1}^n \left(p_{ij}^{(k+1)} \mathbf{x}_i\mathbf{x}_i^T \right)^{T}\right]^{-1}\left[\sum_{i=1}^n \mathbf{x}_i\left(p_{ij}^{(k+1)}\right)^Ty_i^T \right]\\
+\end{align}
+
+\begin{align}
+\boldsymbol{\beta}_j^{(k+1)} &= \left[\sum_{i=1}^n\mathbf{x}_i\mathbf{x}_i^Tp_{ij}^{(k+1)} \right]^{-1}\left[\sum_{i=1}^n \mathbf{x}_ip_{ij}^{(k+1)}y_i \right]
+\end{align}
+
+Next, we will verify that 
+
+\begin{align}
+  \sigma^{2^{(k+1)}} = \dfrac{\sum_{j=1}^{m}\sum_{i=1}^{n}p_{ij}^{(k+1)}(y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k+1)})^2}{n}
+\end{align}
+
+Similar to the verification of the validity of $\boldsymbol{\beta}_j^{(k+1)}$, we are going to replace the probability density function of the normail distribution in \@ref(eq:Q) to get $Q(\Psi | \Psi^{(k)})$. Thus, we have
+
+
+\begin{align}
+Q(\Psi | \Psi^{(k)}) &= \sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)}\log{ \left[ \pi_j \dfrac{1}{\sqrt{2\pi\sigma^2}}\exp{ \left[ \dfrac{-1}{2\sigma^2} \left(y_i-\mathbf{x}_i^{T}\boldsymbol{\beta}_j^{k} - 0\right)^2 \right] } \right] }
+\end{align}
+
+
+Next, we are going to take the partial derivative of $Q(\Psi | \Psi^{(k)})$ with respect to $\sigma^{2^{(k+1)}}$. We would like to advise the reader that the derivation is fairly complicated and that only a summarized version is displayed.
+
+\begin{align}
+\dfrac{\partial Q(\Psi | \Psi^{(k)})}{\partial \sigma^{2^{(k+1)}}} &= \sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)} \left(\dfrac{\sqrt{2\pi\sigma^{2^{(k+1)}}}}{\exp{\left[\dfrac{-1}{2\sigma^{2^{(k+1)}}} (y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)})^2 \right]}} \right)\Big(\dfrac{-\pi}{(2\pi\sigma^{2^{(k+1)}})^{(3/2)}} \exp{\left[\dfrac{-1}{2\sigma^{2^{(k+1)}}} (y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)})^2 \right]} \\
+&+ \dfrac{1}{\sqrt{2\pi\sigma^{2^{(k+1)}}}}\left(\dfrac{1}{2(\sigma^{2^{(k+1)}})^2}(y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)})^2 \right)\exp{\left[\dfrac{-1}{2\sigma^{2^{(k+1)}}} (y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)})^2 \right]}\Big) \\
+\end{align}
+
+
+\begin{align}
+\dfrac{\partial Q(\Psi | \Psi^{(k)})}{\partial \sigma^{2^{(k+1)}}} &= \sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)} \left(\dfrac{-1}{2\sigma^{2^{(k+1)}}} + \dfrac{1}{2(\sigma^{2^{(k+1)}})^2}(y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)})^2\right)
+(\#eq:Qdersgm)
+\end{align}
+
+
+We will now set this partial derivative in \@ref(eq:Qdersgm) equal to $0$, and solve for $\sigma^{2^{(k+1)}}$.
+
+
+\begin{align}
+\dfrac{1}{2\sigma^{2^{(k+1)}}}\sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)} \left(-1 + \dfrac{1}{\sigma^{2^{(k+1)}}}(y_i - \mathbf{x}_i^{T} \boldsymbol{\beta}_j^{(k)})^2\right) = 0
+\end{align}
+
+
+We will multiply both sides by $2\sigma^{2^{(k+1)}}$ and simply the equation.  Therefore, 
+
+$$
+\begin{aligned}
+\sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)} = \dfrac{1}{\sigma^{2^{(k+1)}}} \sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)}(y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)})^2
+\end{aligned}
+$$
+
+Next, we will multiply again both sides by $\sigma^{2^{(k+1)}}$, and divide by $\sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)}$.
+
+\begin{align}
+\sigma^{2^{(k+1)}} &= \dfrac{\sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)}(y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)})^2}{\sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)}}
+\end{align}
+
+Using equation \@ref(eq:pijeq) we may now conclude that 
+
+\begin{align}
+  \sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)} = n
+\end{align}
+
+Thus, we have verified that the provided E- and M-steps were correct since
+
+\begin{align}
+\sigma^{2^{(k+1)}} &= \dfrac{\sum_{i=1}^{n} \sum_{j=1}^{m}p_{ij}^{(k+1)}(y_i - \mathbf{x}_i^{T}\boldsymbol{\beta}_j^{(k)})^2}{n}
+\end{align}
+
+
+# Implement of the EM Algorithm {#sec:ImplementationEM}
+
+In this section we are going to implement the EM algorithm in R. To do that we have defined a function `regmix_em` which has a couple of inputs. The inputs of the functions are `y`, the response vector, `xmat` which is the design matrix, `pi.init` which stores the initial values of the $\pi_j$'s in a $K \times 1$ vector, `beta.init` which saves initial values of the $\beta_j$'s in a $p \times K$ matrix where $p$ is `ncol(xmat)` and $K$ is the number of components in the mixture, `sigma.init` which gives the initial values of $\sigma$, and lastly a control list for controlling the maximum number of iterations and the convergence tolerance.
+
+```{r EM Algo, echo = TRUE, message = FALSE, warning = FALSE}
+regmix_em <- function(y, xmat, pi.init, beta.init, sigma.init, 
+  control = list(maxit = 1000, tol = .Machine$double.eps^0.3)){
+  
+  xmat <- as.matrix(xmat)
+  
+  n <- nrow(xmat)
+  p <- ncol(xmat)
+  m <- length(pi.init)
+  
+  pi <- pi.init
+  beta <- beta.init
+  sigma <- sigma.init
+  
+  maxit <- control$maxit
+  tol <- control$tol
+  convergent <- 1
+  
+  P <- matrix(NA, nrow = n, ncol = m)
+  betanew <- matrix(NA, nrow = p, ncol = m)
+  
+  for (i in 1:maxit) {
+    for (j in 1:n) {
+      P[j,] <- pi * dnorm(y[j] - xmat[j,] %*% beta, mean = 0, 
+      sd = sigma)/sum(pi * dnorm(y[j] - xmat[j,] %*% beta, 
+      mean = 0, sd = sigma))
+    }
+    
+    pi.new <- colMeans(P)
+    
+    for (j in 1:m) {
+      betanew[,j] <- solve(t(xmat) %*% diag(P[,j]) %*% xmat) %*% 
+      t(xmat) %*% diag(P[,j]) %*% y
+    }
+    
+    sigmanew <- sqrt(sum(P * (y %*% t(rep(1, m)) - xmat %*% betanew)^2)/n)
+    
+    convergent <- sum(abs(pi.new - pi)) + sum(abs(betanew - beta)) + 
+    abs(sigmanew - sigma)
+    if(convergent < tol) break
+    
+    pi <- pi.new
+    beta <- betanew
+    sigma <- sigmanew
+    
+  }
+  
+  if(i == maxit)
+  message("The maximum number of iterations was reached!")
+  
+  return(list(pi = pi.new, beta = betanew, sigma = sigmanew, 
+  convergent = convergent, iter = i))
+  
+}
+```
+
+# Data Generation and Parameters Estimation {#sec:DataParameter}
+
+In this section we are going to generate data from the mixture regression model using the function `regmix_sim`
+
+```{r DataGenParaEst, echo = TRUE, message = FALSE, warning = FALSE}
+regmix_sim <- function(n, pi, beta, sigma) {
+    K <- ncol(beta)
+    p <- NROW(beta)
+    xmat <- matrix(rnorm(n * p), n, p) # normal covaraites
+    error <- matrix(rnorm(n * K, sd = sigma), n, K)
+    ymat <- xmat %*% beta + error # n by K matrix
+    ind <- t(rmultinom(n, size = 1, prob = pi))
+    y <- rowSums(ymat * ind)
+    data.frame(y, xmat)
+}
+```
+
+I'm going to use the initial data provided in the exercise to compute the parameters.
+
+```{r Data1, echo = TRUE, message = FALSE, warning = FALSE}
+n <- 400
+pi <- c(.3, .4, .3)
+bet <- matrix(c( 1,  1,  1, -1, -1, -1), 2, 3)
+sig <- 1
+set.seed(1205)
+dat <- regmix_sim(n, pi, bet, sig)
+regmix_em(y = dat[,1], xmat = dat[,-1], pi.init = pi / pi / length(pi), 
+beta.init = bet * 0, sigma.init = sig / sig, 
+control = list(maxit = 500, tol = 1e-5))
+
+```
+
+As we can see, if the inital values of the $\beta_j$ vector with $j = 1, \ldots, m$ is $0$, then, the algorithm stops after $2$ iterations. So, in order to improve the estimation, we have changed the vector of initial values of $\beta_j$. Instead of assigning a null vector, we are going to assign the vector `matrix(c( 1,  1,  1, -1, -1, -1), 2, 3)` to `beta.init`.
+
+```{r Data2, echo = TRUE, message = FALSE, warning = FALSE}
+regmix_em(y = dat[,1], xmat = dat[,-1], pi.init = pi / pi / length(pi), 
+beta.init = matrix(c( 1,  1,  1, -1, -1, -1), 2, 3), 
+sigma.init = sig / sig, control = list(maxit = 500, tol = 1e-5))
+```
+
+After these small changes, the algorithm stops after $49$ iterations, and delivers better estimates of the parameters.
+
+# Reference {-}
+
+[pandoc]: http://pandoc.org/
+[pandocManual]: http://pandoc.org/MANUAL.html
+[repo]: https://github.com/wenjie2wang/datalab-templates
+[taskView]: https://cran.r-project.org/web/views/ReproducibleResearch.html
+[shiny.io]: https://www.shinyapps.io/
+[wenjie-stat.shinyapps]: https://wwenjie-stat.shinyapps.io/minisplines2
